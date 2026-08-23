@@ -16,6 +16,8 @@ decides pass/fail.
 from dataclasses import dataclass
 from typing import Optional
 
+from app.audit.audit_log import log_event, new_transaction_id
+
 # Named so it can be referenced directly (docs, pitch video) instead of a
 # magic number buried in logic.
 AUTO_APPROVAL_LIMIT_PAISE = 500_000  # Rs. 5,000
@@ -40,7 +42,43 @@ class GateResult:
         return {"approved": False, "reason": self.reason}
 
 
-def check_gate(amount_paise: int, confirmed: bool, reasoning: str) -> dict:
+def _evaluate(amount_paise: int, confirmed: bool, reasoning: str) -> GateResult:
+    if amount_paise > AUTO_APPROVAL_LIMIT_PAISE:
+        return GateResult(
+            approved=False,
+            reason=(
+                f"Amount Rs.{amount_paise / 100:,.2f} exceeds "
+                f"Rs.{AUTO_APPROVAL_LIMIT_PAISE / 100:,.2f} auto-approval limit."
+            ),
+        )
+
+    if not confirmed:
+        return GateResult(
+            approved=False,
+            reason="Order was not explicitly confirmed by the buyer/agent.",
+        )
+
+    if not reasoning or not reasoning.strip():
+        return GateResult(
+            approved=False,
+            reason="No reasoning provided for this recommendation.",
+        )
+
+    return GateResult(
+        approved=True,
+        amount_paise=amount_paise,
+        confirmed=confirmed,
+        reasoning=reasoning,
+    )
+
+
+def check_gate(
+    amount_paise: int,
+    confirmed: bool,
+    reasoning: str,
+    transaction_id: Optional[str] = None,
+    source: str = "unspecified",
+) -> dict:
     """Run the three gate checks against a proposed order.
 
     Checks are evaluated in order (amount, then confirmation, then
@@ -51,36 +89,36 @@ def check_gate(amount_paise: int, confirmed: bool, reasoning: str) -> dict:
         confirmed: whether the buyer/agent explicitly confirmed this order.
         reasoning: the reasoning string behind this recommendation; must be
             non-empty for the gate to pass.
+        transaction_id: id linking this check's audit log event to a shared
+            transaction thread (e.g. with the recommendation that preceded
+            it). Generated automatically if not provided.
+        source: "chat" or "agent" — which entry adapter triggered this call.
+            Defaults to "unspecified" for standalone/test use before Phase 6/7
+            adapters exist.
 
     Returns:
-        {"approved": True, "amount_paise": ..., "confirmed": ..., "reasoning": ...}
+        {"approved": True, "amount_paise": ..., "confirmed": ..., "reasoning": ..., "transaction_id": ...}
         or
-        {"approved": False, "reason": "<human-readable reason>"}
+        {"approved": False, "reason": "<human-readable reason>", "transaction_id": ...}
     """
-    if amount_paise > AUTO_APPROVAL_LIMIT_PAISE:
-        return GateResult(
-            approved=False,
-            reason=(
-                f"Amount Rs.{amount_paise / 100:,.2f} exceeds "
-                f"Rs.{AUTO_APPROVAL_LIMIT_PAISE / 100:,.2f} auto-approval limit."
-            ),
-        ).to_dict()
+    if transaction_id is None:
+        transaction_id = new_transaction_id()
 
-    if not confirmed:
-        return GateResult(
-            approved=False,
-            reason="Order was not explicitly confirmed by the buyer/agent.",
-        ).to_dict()
+    gate_result = _evaluate(amount_paise, confirmed, reasoning)
+    result = gate_result.to_dict()
+    result["transaction_id"] = transaction_id
 
-    if not reasoning or not reasoning.strip():
-        return GateResult(
-            approved=False,
-            reason="No reasoning provided for this recommendation.",
-        ).to_dict()
+    log_event(
+        transaction_id=transaction_id,
+        source=source,
+        event_type="gate_check",
+        details={
+            "amount_paise": amount_paise,
+            "confirmed": confirmed,
+            "reasoning_provided": bool(reasoning and reasoning.strip()),
+            "approved": gate_result.approved,
+            "reason": gate_result.reason,
+        },
+    )
 
-    return GateResult(
-        approved=True,
-        amount_paise=amount_paise,
-        confirmed=confirmed,
-        reasoning=reasoning,
-    ).to_dict()
+    return result
