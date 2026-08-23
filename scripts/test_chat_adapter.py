@@ -42,7 +42,11 @@ def case_1_full_scenario_a() -> None:
     )
     print(f"NEXUS (turn 1): {turn1}")
     assert session.state == ChatState.AWAITING_CONFIRMATION, "Should await confirmation after turn 1"
-    assert "Confirm order" in turn1, "Turn 1 reply should explicitly ask for confirmation"
+    # Scenario A always includes the CloudRest Sleeping Pad upsell, so the
+    # three-way prompt (yes / primary only / no) applies — see
+    # FAILURE_LOG.md Entry 6.
+    assert "Confirm both items" in turn1, "Turn 1 reply should explicitly ask for confirmation"
+    assert "primary only" in turn1, "Three-way prompt should offer the primary-only path"
 
     transaction_id = session._pending["transaction_id"]
 
