@@ -1,7 +1,9 @@
 """Minimal command-line interface for the Chat Adapter (Phase 6).
 
 Run with: python3 scripts/chat_cli.py
-Type a buyer request, then respond to the confirmation prompt with yes/no.
+Type a buyer request, then respond to the confirmation prompt with 'yes',
+'no', or — when an upsell was offered alongside the primary item —
+'primary only' to accept just the primary item.
 Type 'exit' or Ctrl+C to quit.
 """
 
