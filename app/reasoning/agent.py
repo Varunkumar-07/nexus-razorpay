@@ -31,16 +31,23 @@ product id — only recommend products that came back from a tool call.
 
 Your job:
 1. Find the best-matching primary product for the buyer's request.
-2. Identify at most one legitimate upsell or cross-sell: a genuinely
+2. Check the request for an explicit quantity of the primary product (e.g.
+   "x2", "2x", "two of", "a couple of"). If one is stated, set quantity to
+   that number; otherwise quantity is 1. Never drop or ignore an explicit
+   quantity — it directly changes the order total.
+3. Identify at most one legitimate upsell or cross-sell: a genuinely
    complementary product (e.g. a sleeping pad for a sleeping bag, a stove for
    a cook set), not a random unrelated item. If nothing complementary exists
-   in the catalog, leave the upsell out.
-3. If nothing in the catalog reasonably satisfies the request (e.g. the
+   in the catalog, leave the upsell out. The upsell is always exactly one
+   extra unit — it is never a substitute for, and never affected by, the
+   primary product's quantity. Do not let an upsell distract you from
+   getting the primary product and its quantity right.
+4. If nothing in the catalog reasonably satisfies the request (e.g. the
    budget is too low for anything in stock, or the category doesn't exist),
    do not force a bad recommendation — set no_match to true and explain why.
 
 When you're done reasoning, call propose_recommendation exactly once with your
-final answer."""
+final answer, including the correct quantity for the primary product."""
 
 
 class ReasoningError(RuntimeError):
@@ -86,7 +93,8 @@ def recommend(
             "transaction_id": str,
             "no_match": bool,
             "primary": dict | None,   # full product dict
-            "upsell": dict | None,    # full product dict
+            "quantity": int,          # units of primary, parsed from the request; always 1 for the upsell
+            "upsell": dict | None,    # full product dict, always exactly one unit
             "reasoning": str,
         }
 
@@ -170,6 +178,20 @@ def recommend(
     )
 
 
+def _parse_quantity(raw_quantity) -> int:
+    """Defensively coerce the model's quantity argument to a positive int.
+
+    Falls back to 1 (never 0 or negative, never non-numeric) so a malformed
+    or missing quantity can't silently zero out an order or crash amount
+    calculations downstream.
+    """
+    try:
+        quantity = int(raw_quantity)
+    except (TypeError, ValueError):
+        return 1
+    return quantity if quantity >= 1 else 1
+
+
 def _build_result(args: dict, transaction_id: str, source: str, request: str) -> dict:
     no_match = bool(args.get("no_match", False))
     primary_id = args.get("primary_product_id")
@@ -179,6 +201,8 @@ def _build_result(args: dict, transaction_id: str, source: str, request: str) ->
     upsell = get_product_by_id(upsell_id) if upsell_id else None
     reasoning = args.get("reasoning", "")
     no_match = no_match or primary is None
+    # Quantity only means something when there's an actual primary product.
+    quantity = _parse_quantity(args.get("quantity", 1)) if primary else 1
 
     log_event(
         transaction_id=transaction_id,
@@ -188,6 +212,7 @@ def _build_result(args: dict, transaction_id: str, source: str, request: str) ->
             "request": request,
             "no_match": no_match,
             "primary_product_id": primary["id"] if primary else None,
+            "quantity": quantity,
             "upsell_product_id": upsell["id"] if upsell else None,
             "reasoning": reasoning,
         },
@@ -197,6 +222,7 @@ def _build_result(args: dict, transaction_id: str, source: str, request: str) ->
         "transaction_id": transaction_id,
         "no_match": no_match,
         "primary": primary,
+        "quantity": quantity,
         "upsell": upsell,
         "reasoning": reasoning,
     }
