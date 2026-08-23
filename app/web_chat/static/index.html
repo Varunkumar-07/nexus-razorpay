@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEXUS — Northlight Outdoors</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-top">
+      <h1>NEXUS <span>— Northlight Outdoors</span></h1>
+      <nav class="nav-links">
+        <a href="/" class="nav-link active">Chat with NEXUS</a>
+        <a href="/products" class="nav-link">Browse Products</a>
+      </nav>
+    </div>
+    <p class="subtitle">Chat with the shopping assistant. Every order is bounded, confirmed, and logged.</p>
+  </header>
+
+  <main id="messages" class="messages"></main>
+
+  <footer class="composer">
+    <input
+      id="input"
+      type="text"
+      placeholder="e.g. I need a good sleeping bag for winter camping, budget around Rs.3000."
+      autocomplete="off"
+    />
+    <button id="send">Send</button>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
