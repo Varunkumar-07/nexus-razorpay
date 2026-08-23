@@ -123,11 +123,23 @@ FINAL_TOOL_SCHEMA = {
                     "type": ["integer", "null"],
                     "description": "Id of the best-matching product, or null if no_match is true.",
                 },
+                "quantity": {
+                    "type": "integer",
+                    "description": (
+                        "How many units of the PRIMARY product the buyer wants. Parse this from "
+                        "explicit quantity language in the request (e.g. 'x2', '2x', 'two of', "
+                        "'a couple of'). Defaults to 1 if the buyer didn't state a quantity. This "
+                        "applies ONLY to the primary product — the upsell is always a single unit, "
+                        "regardless of the primary's quantity."
+                    ),
+                },
                 "upsell_product_id": {
                     "type": ["integer", "null"],
                     "description": (
                         "Id of one legitimate complementary product to upsell/cross-sell, "
-                        "or null if none fits."
+                        "or null if none fits. This is always a single extra unit — it must "
+                        "never be used as a substitute for, or confused with, the quantity of "
+                        "the primary product the buyer explicitly asked for."
                     ),
                 },
                 "reasoning": {
@@ -138,7 +150,7 @@ FINAL_TOOL_SCHEMA = {
                     ),
                 },
             },
-            "required": ["no_match", "primary_product_id", "upsell_product_id", "reasoning"],
+            "required": ["no_match", "primary_product_id", "quantity", "upsell_product_id", "reasoning"],
         },
     },
 }
