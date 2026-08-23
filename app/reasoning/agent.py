@@ -10,10 +10,12 @@ happens in Phase 5, after the Gate (Phase 3) and Audit Log (Phase 4) exist.
 
 import json
 import os
+from typing import Optional
 
 from dotenv import load_dotenv
 from groq import Groq
 
+from app.audit.audit_log import log_event, new_transaction_id
 from app.catalog.service import get_product_by_id
 from app.reasoning.tools import CATALOG_TOOL_SCHEMAS, FINAL_TOOL_SCHEMA, TOOL_DISPATCH
 
@@ -45,25 +47,43 @@ class ReasoningError(RuntimeError):
     """Raised when the reasoning core fails to produce a usable recommendation."""
 
 
-def _run_tool_call(tool_call) -> dict:
+def _run_tool_call(tool_call, transaction_id: str, source: str) -> dict:
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments or "{}")
     fn = TOOL_DISPATCH.get(name)
-    if fn is None:
-        return {"error": f"Unknown tool: {name}"}
-    return fn(args)
+    result = {"error": f"Unknown tool: {name}"} if fn is None else fn(args)
+
+    log_event(
+        transaction_id=transaction_id,
+        source=source,
+        event_type="catalog_query",
+        details={"tool": name, "args": args, "result": result},
+    )
+    return result
 
 
-def recommend(request: str, max_tool_iterations: int = 6) -> dict:
+def recommend(
+    request: str,
+    max_tool_iterations: int = 6,
+    transaction_id: Optional[str] = None,
+    source: str = "unspecified",
+) -> dict:
     """Produce a structured recommendation for a natural-language buyer request.
 
     Args:
         request: free-text buyer request, e.g.
             "I need a good sleeping bag for winter camping, budget around Rs.3000."
         max_tool_iterations: safety cap on catalog tool round-trips before giving up.
+        transaction_id: id linking this call's audit log events to a shared
+            transaction thread (e.g. with a later Gate check). Generated
+            automatically if not provided.
+        source: "chat" or "agent" — which entry adapter triggered this call.
+            Defaults to "unspecified" for standalone/test use before Phase 6/7
+            adapters exist.
 
     Returns:
         {
+            "transaction_id": str,
             "no_match": bool,
             "primary": dict | None,   # full product dict
             "upsell": dict | None,    # full product dict
@@ -75,6 +95,9 @@ def recommend(request: str, max_tool_iterations: int = 6) -> dict:
             model never converges on a final recommendation within
             max_tool_iterations.
     """
+    if transaction_id is None:
+        transaction_id = new_transaction_id()
+
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise ReasoningError("GROQ_API_KEY is not set in the environment.")
@@ -127,9 +150,9 @@ def recommend(request: str, max_tool_iterations: int = 6) -> dict:
             for tool_call in message.tool_calls:
                 if tool_call.function.name == "propose_recommendation":
                     args = json.loads(tool_call.function.arguments or "{}")
-                    return _build_result(args)
+                    return _build_result(args, transaction_id, source, request)
 
-                result = _run_tool_call(tool_call)
+                result = _run_tool_call(tool_call, transaction_id, source)
                 messages.append(
                     {
                         "role": "tool",
@@ -147,17 +170,33 @@ def recommend(request: str, max_tool_iterations: int = 6) -> dict:
     )
 
 
-def _build_result(args: dict) -> dict:
+def _build_result(args: dict, transaction_id: str, source: str, request: str) -> dict:
     no_match = bool(args.get("no_match", False))
     primary_id = args.get("primary_product_id")
     upsell_id = args.get("upsell_product_id")
 
     primary = get_product_by_id(primary_id) if primary_id else None
     upsell = get_product_by_id(upsell_id) if upsell_id else None
+    reasoning = args.get("reasoning", "")
+    no_match = no_match or primary is None
+
+    log_event(
+        transaction_id=transaction_id,
+        source=source,
+        event_type="recommendation",
+        details={
+            "request": request,
+            "no_match": no_match,
+            "primary_product_id": primary["id"] if primary else None,
+            "upsell_product_id": upsell["id"] if upsell else None,
+            "reasoning": reasoning,
+        },
+    )
 
     return {
-        "no_match": no_match or primary is None,
+        "transaction_id": transaction_id,
+        "no_match": no_match,
         "primary": primary,
         "upsell": upsell,
-        "reasoning": args.get("reasoning", ""),
+        "reasoning": reasoning,
     }
