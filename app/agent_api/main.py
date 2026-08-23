@@ -13,12 +13,18 @@ reasoning, the same way a real agent-to-agent commerce protocol would.
 
 Run standalone:
     uvicorn app.agent_api.main:app --reload
-Then browse http://127.0.0.1:8000/docs for the interactive OpenAPI docs.
+Then browse http://127.0.0.1:8000/docs for the interactive OpenAPI docs,
+or http://127.0.0.1:8000/ for the human Chat web UI (Phase 10 — a thin
+HTTP wrapper + static frontend over the unmodified Phase 6 ChatSession,
+mounted at the end of this file so it never shadows the API routes above).
 """
 
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.agent_api.catalog_search import search_catalog
 from app.agent_api.schemas import OrderRequest, OrderResponse, ProductOut, RecommendRequest, RecommendResponse
@@ -26,6 +32,9 @@ from app.audit.audit_log import log_event, new_transaction_id
 from app.catalog.seed_data import seed
 from app.gate.gate import check_gate
 from app.razorpay_integration.orders import GateNotApprovedError, create_order
+from app.web_chat.catalog_routes import router as catalog_page_router
+from app.web_chat.pages import router as web_pages_router
+from app.web_chat.routes import router as web_chat_router
 
 SOURCE = "agent"
 
@@ -43,6 +52,20 @@ app = FastAPI(
         "the human path. No shortcuts, no separate gate implementation."
     ),
     version="1.0.0",
+)
+
+# CORS for the separate React + Vite frontend (frontend/), which runs on
+# its own dev server origin instead of being served by this FastAPI app.
+# Additive only — no existing route logic is touched.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -222,3 +245,21 @@ def place_order(payload: OrderRequest) -> dict:
         "order": order_result["order"],
         "payment_status": order_result["payment_status"],
     }
+
+
+# --- Web Chat UI (Phase 10) -------------------------------------------------
+# Additive only: wraps the existing, unmodified Phase 6 ChatSession over HTTP
+# (see app/web_chat/routes.py) and serves its static frontend. catalog_all
+# (GET /catalog/all) is a separate, read-only listing for the browsable
+# product page (app/web_chat/catalog_routes.py) — reuses Phase 1's catalog
+# functions unmodified, no chat/gate/order logic. The static mount is
+# registered last, at "/", so it only ever catches requests that don't match
+# an explicit route above (e.g. "/", "/style.css", "/app.js", "/products.js")
+# — it never shadows /catalog/search, /catalog/all, /recommend, /order,
+# /chat/*, /products, or /docs.
+app.include_router(web_chat_router)
+app.include_router(catalog_page_router)
+app.include_router(web_pages_router)
+
+_WEB_CHAT_STATIC_DIR = Path(__file__).resolve().parent.parent / "web_chat" / "static"
+app.mount("/", StaticFiles(directory=str(_WEB_CHAT_STATIC_DIR), html=True), name="web_chat_ui")
