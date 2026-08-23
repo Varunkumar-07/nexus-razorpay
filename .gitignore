@@ -218,3 +218,4 @@ __marimo__/
 .streamlit/secrets.toml
 Phases.png
 .DS_Store
+data/*.db
