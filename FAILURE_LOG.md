@@ -132,6 +132,19 @@ build, and exactly how it was resolved. Updated live, phase by phase.
 - **Time lost:** ~15 minutes (fast once the audit-trail trace was captured — the transaction_id technique made the root cause unambiguous on the very first diagnostic call).
 - **Status:** Resolved (message-misattribution fixed and verified at zero cost; end-to-end re-confirmation of both exact reported requests is pending Groq quota recovery — same external blocker as Entry 6's live verification).
 
+### 8 — Groq model occasionally hallucinates a malformed tool-call name (`<|channel|>commentary` leak)
+- **Date/Time:** 2026-08-24
+- **Phase:** Build of the Metrics module (`app/metrics/`); hit while re-running the full backend regression suite for verification, unrelated to the metrics work itself
+- **Component:** External — Groq's `openai/gpt-oss-120b` model, surfaced through `app/reasoning/agent.py`'s tool-calling loop. No NEXUS code is at fault.
+- **What broke (symptom):** `scripts/test_quantity_handling.py` Case 1 ("AlpineGuard Winter Tent x 2") failed with an uncaught `ReasoningError`: `groq.BadRequestError: Error code: 400 - Tool call validation failed: attempted to call tool 'search_by_category<|channel|>commentary' which was not in request.tools`. The model emitted a tool name with an internal special token (`<|channel|>commentary` — part of this model's "harmony" response format) leaked into it, which Groq's API correctly rejects as not matching any real registered tool.
+- **What we were trying to do:** Running the full 12-script regression suite to confirm the metrics module's changes (the two new `order_declined`/`confirmation_unclear` event types in `adapter.py`) didn't regress anything else.
+- **Root cause:** Not a NEXUS bug. This is the second time this exact failure mode has been observed today (the first was during a Groq-quota recovery check, on a *different* request — "ExpeditionMax 65L Backpack" — confirming it's a genuine, low-frequency, model-side quirk rather than a one-off tied to a specific prompt). `openai/gpt-oss-120b` occasionally emits its internal channel-routing tokens as part of the function name in a tool call; Groq's server-side validation then rejects the whole request with a 400, which `recommend()` correctly wraps as a `ReasoningError` — but nothing in the pipeline retries on this specific, almost-certainly-transient failure class.
+- **How we solved it:** Nothing in NEXUS's code needed to change to resolve *this* instance — re-ran `scripts/test_quantity_handling.py` alone immediately after, with no code changes, and it passed cleanly (see below). Did not add automatic retry logic for this failure class right now, since it's out of scope for the metrics task this was found during and the existing behavior (surface a clear error rather than silently retry into more quota spend) is a defensible default; flagging it as a good candidate for a future small hardening (e.g. one retry specifically on `tool_use_failed` / malformed function names) rather than doing it as an unplanned addition here.
+- **Verification:** Re-ran `scripts/test_quantity_handling.py` standalone — all 3 cases passed. The other 11 regression scripts in the same suite run (`test_catalog` through `test_bug1_catalog_matching`) all passed on the first attempt, confirming this was an isolated, transient hit on one specific call, not a systemic issue introduced by the metrics module's changes.
+- **Tools/resources used:** Direct comparison against the earlier `<|channel|>commentary` occurrence (Groq quota-recovery check, prior session turn) to recognize the pattern; a clean standalone re-run to confirm transience.
+- **Time lost:** ~5 minutes (mostly just re-running the one script).
+- **Status:** Resolved by retry (no code change needed for this instance); noted as a candidate for future retry-hardening in `app/reasoning/agent.py`.
+
 ---
 
 ## Deliberate Failure Scenarios — Demonstrated
