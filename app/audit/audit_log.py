@@ -77,6 +77,45 @@ def log_event(transaction_id: str, source: str, event_type: str, details: dict) 
         conn.close()
 
 
+def get_events_by_type(event_type: str) -> list[dict]:
+    """Retrieve every event of one type, across all transactions, in
+    chronological order.
+
+    Read-only, cross-transaction — the counterpart to get_transaction_trail()
+    (which is scoped to one transaction_id). Used by MetricsService
+    (app/metrics/) to aggregate over the existing Audit Log without any
+    schema changes.
+
+    Args:
+        event_type: e.g. "recommendation", "gate_check", "order_created",
+            "order_declined", "confirmation_unclear".
+
+    Returns:
+        List of event dicts: {id, timestamp, transaction_id, source,
+        event_type, details}, ordered oldest first.
+    """
+    init_audit_log()
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE event_type = ? ORDER BY id ASC",
+            (event_type,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "transaction_id": row["transaction_id"],
+                "source": row["source"],
+                "event_type": row["event_type"],
+                "details": json.loads(row["details"]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
 def get_transaction_trail(transaction_id: str) -> list[dict]:
     """Retrieve the full audit trail for one transaction, in chronological order.
 
