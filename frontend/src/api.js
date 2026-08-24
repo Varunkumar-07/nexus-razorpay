@@ -62,3 +62,11 @@ export async function catalogAll() {
   }
   return resp.json();
 }
+
+export async function metricsSummary() {
+  const resp = await fetch(`${API_BASE_URL}/metrics/summary`);
+  if (!resp.ok) {
+    throw new Error(`/metrics/summary failed: ${resp.status}`);
+  }
+  return resp.json();
+}
