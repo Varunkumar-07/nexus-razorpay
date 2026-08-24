@@ -31,6 +31,7 @@ from app.agent_api.schemas import OrderRequest, OrderResponse, ProductOut, Recom
 from app.audit.audit_log import log_event, new_transaction_id
 from app.catalog.seed_data import seed
 from app.gate.gate import check_gate
+from app.metrics.routes import router as metrics_router
 from app.razorpay_integration.orders import GateNotApprovedError, create_order
 from app.web_chat.catalog_routes import router as catalog_page_router
 from app.web_chat.pages import router as web_pages_router
@@ -260,6 +261,7 @@ def place_order(payload: OrderRequest) -> dict:
 app.include_router(web_chat_router)
 app.include_router(catalog_page_router)
 app.include_router(web_pages_router)
+app.include_router(metrics_router)
 
 _WEB_CHAT_STATIC_DIR = Path(__file__).resolve().parent.parent / "web_chat" / "static"
 app.mount("/", StaticFiles(directory=str(_WEB_CHAT_STATIC_DIR), html=True), name="web_chat_ui")
