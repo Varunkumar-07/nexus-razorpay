@@ -22,6 +22,7 @@ its transaction_id) — one session per buyer conversation.
 from enum import Enum, auto
 from typing import Optional
 
+from app.audit.audit_log import log_event
 from app.gate.gate import check_gate
 from app.razorpay_integration.orders import create_order
 from app.reasoning.agent import recommend
@@ -171,6 +172,17 @@ class ChatSession:
         if normalized in _NEGATIVE:
             self.state = ChatState.DONE
             self._pending = None
+            # Logged so metrics (e.g. gate rejection breakdown) can tell a
+            # buyer's explicit decline apart from an unclear reply or an
+            # over-bound Gate rejection — none of those share a signature
+            # otherwise. Uses the existing audit_log schema, just a new
+            # event_type value, same as every other event already does.
+            log_event(
+                transaction_id=pending["transaction_id"],
+                source=SOURCE,
+                event_type="order_declined",
+                details={"amount_paise": pending["amount_paise"]},
+            )
             return "No problem — order cancelled. Let me know if you'd like to look at something else."
 
         if has_upsell and _matches_primary_only(text, pending["primary"]["name"], pending["upsell"]["name"]):
@@ -181,7 +193,14 @@ class ChatSession:
 
         # Unclear reply: stay in AWAITING_CONFIRMATION and ask again.
         # Never default to approval (or to any specific path) on an
-        # ambiguous response.
+        # ambiguous response. Logged for the same reason as the decline
+        # path above — distinguishable from "declined" and "over-bound".
+        log_event(
+            transaction_id=pending["transaction_id"],
+            source=SOURCE,
+            event_type="confirmation_unclear",
+            details={"buyer_input": text, "amount_paise": pending["amount_paise"]},
+        )
         if has_upsell:
             return (
                 f"Sorry, I didn't catch that. Reply 'yes' to confirm both items for "
