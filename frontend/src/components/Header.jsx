@@ -14,6 +14,9 @@ export default function Header({ subtitle }) {
           <NavLink to="/products" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Browse Products
           </NavLink>
+          <NavLink to="/stats" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+            Stats
+          </NavLink>
         </nav>
       </div>
       <p className="subtitle">{subtitle}</p>
