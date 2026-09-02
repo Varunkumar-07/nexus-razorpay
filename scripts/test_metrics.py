@@ -59,10 +59,16 @@ def get_session_with_upsell(request: str, max_attempts: int = 5):
     run. What's under test is the metrics arithmetic, not the model's
     determinism, so we retry rather than let unrelated variability fail
     the test (same pattern as scripts/test_upsell_decline.py).
+
+    `request` never states a quantity, so turn 1 now lands in the new
+    AWAITING_QUANTITY state before confirmation — answered "1" here so
+    every caller still gets back the confirmation-stage prompt as `turn1`.
     """
     for attempt in range(1, max_attempts + 1):
         session = ChatSession()
         turn1 = session.handle_message(request)
+        if session.state == ChatState.AWAITING_QUANTITY:
+            turn1 = session.handle_message("1")
         if session._pending is not None and session._pending["upsell"] is not None:
             return session, turn1
         print(f"    (attempt {attempt}: no upsell offered this run, retrying)")

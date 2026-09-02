@@ -133,6 +133,14 @@ FINAL_TOOL_SCHEMA = {
                         "regardless of the primary's quantity."
                     ),
                 },
+                "quantity_explicit": {
+                    "type": "boolean",
+                    "description": (
+                        "True only if the buyer's request itself stated a quantity for the primary "
+                        "product (e.g. 'x2', '2x', 'two of', 'a couple of'). False if no quantity "
+                        "was mentioned at all and you defaulted quantity to 1 yourself."
+                    ),
+                },
                 "upsell_product_id": {
                     "type": ["integer", "null"],
                     "description": (
@@ -150,7 +158,14 @@ FINAL_TOOL_SCHEMA = {
                     ),
                 },
             },
-            "required": ["no_match", "primary_product_id", "quantity", "upsell_product_id", "reasoning"],
+            "required": [
+                "no_match",
+                "primary_product_id",
+                "quantity",
+                "quantity_explicit",
+                "upsell_product_id",
+                "reasoning",
+            ],
         },
     },
 }

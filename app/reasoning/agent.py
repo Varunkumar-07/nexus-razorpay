@@ -33,7 +33,8 @@ Your job:
 1. Find the best-matching primary product for the buyer's request.
 2. Check the request for an explicit quantity of the primary product (e.g.
    "x2", "2x", "two of", "a couple of"). If one is stated, set quantity to
-   that number; otherwise quantity is 1. Never drop or ignore an explicit
+   that number and quantity_explicit to true; otherwise set quantity to 1
+   and quantity_explicit to false. Never drop or ignore an explicit
    quantity — it directly changes the order total.
 3. Identify at most one legitimate upsell or cross-sell: a genuinely
    complementary product (e.g. a sleeping pad for a sleeping bag, a stove for
@@ -94,6 +95,7 @@ def recommend(
             "no_match": bool,
             "primary": dict | None,   # full product dict
             "quantity": int,          # units of primary, parsed from the request; always 1 for the upsell
+            "quantity_explicit": bool,  # True if the request itself stated a quantity
             "upsell": dict | None,    # full product dict, always exactly one unit
             "reasoning": str,
         }
@@ -203,6 +205,7 @@ def _build_result(args: dict, transaction_id: str, source: str, request: str) ->
     no_match = no_match or primary is None
     # Quantity only means something when there's an actual primary product.
     quantity = _parse_quantity(args.get("quantity", 1)) if primary else 1
+    quantity_explicit = bool(args.get("quantity_explicit", False)) if primary else False
 
     log_event(
         transaction_id=transaction_id,
@@ -213,6 +216,7 @@ def _build_result(args: dict, transaction_id: str, source: str, request: str) ->
             "no_match": no_match,
             "primary_product_id": primary["id"] if primary else None,
             "quantity": quantity,
+            "quantity_explicit": quantity_explicit,
             "upsell_product_id": upsell["id"] if upsell else None,
             "reasoning": reasoning,
         },
@@ -223,6 +227,7 @@ def _build_result(args: dict, transaction_id: str, source: str, request: str) ->
         "no_match": no_match,
         "primary": primary,
         "quantity": quantity,
+        "quantity_explicit": quantity_explicit,
         "upsell": upsell,
         "reasoning": reasoning,
     }

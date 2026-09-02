@@ -54,14 +54,33 @@ def _get_session_with_upsell(request: str, max_attempts: int = 5):
     temperature=0, so it varies run to run — the assertions in these cases
     are about the primary-only *mechanism*, not about forcing an upsell to
     appear, so we retry rather than let unrelated variability fail the test).
+
+    `request` here never states a quantity, so turn 1 now lands in the new
+    AWAITING_QUANTITY state (Part A) before confirmation — this answers "1"
+    on the caller's behalf and returns the resulting confirmation prompt as
+    `turn1`, so every existing caller (which only cares about the
+    confirmation-stage text/pending state) is unaffected.
     """
     for attempt in range(1, max_attempts + 1):
         session = ChatSession()
         turn1 = session.handle_message(request)
+        if session.state == ChatState.AWAITING_QUANTITY:
+            turn1 = session.handle_message("1")
         if session._pending is not None and session._pending["upsell"] is not None:
             return session, turn1
         print(f"(attempt {attempt}: no upsell offered this run, retrying with a fresh session)")
     raise AssertionError(f"No upsell was offered for {request!r} after {max_attempts} attempts")
+
+
+def _decline_continue_shopping(session: ChatSession) -> str:
+    """Send the trailing 'no' at AWAITING_CONTINUE_SHOPPING and confirm the
+    session reaches true DONE — the terminal state every existing case here
+    used to reach directly, now one turn later (Part B).
+    """
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
+    final = session.handle_message("no")
+    assert session.state == ChatState.DONE
+    return final
 
 
 def case_1_accept_both() -> None:
@@ -75,9 +94,10 @@ def case_1_accept_both() -> None:
 
     turn2 = session.handle_message("yes")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "Order placed" in turn2
     assert "primary item only" not in turn2.lower(), "Full-bundle order should not say 'primary item only'"
+    _decline_continue_shopping(session)
 
     trail = get_transaction_trail(transaction_id)
     gate_events = [e for e in trail if e["event_type"] == "gate_check"]
@@ -104,9 +124,10 @@ def case_2_decline_upsell_primary_only_approved() -> None:
 
     turn2 = session.handle_message("primary only")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "Order placed" in turn2, "Primary-only should still place a real order when it's within the Gate bound"
     assert "primary item only" in turn2.lower()
+    _decline_continue_shopping(session)
 
     trail = get_transaction_trail(transaction_id)
     gate_events = [e for e in trail if e["event_type"] == "gate_check"]
@@ -134,6 +155,9 @@ def case_2b_decline_upsell_natural_phrase() -> None:
 
     turn1 = session.handle_message("Tell me about the Camp Cook Set (4-piece)")
     print(f"NEXUS (turn 1): {turn1}")
+    assert session.state == ChatState.AWAITING_QUANTITY
+    turn1b = session.handle_message("1")
+    print(f"NEXUS (turn 1b, quantity answered): {turn1b}")
     assert session.state == ChatState.AWAITING_CONFIRMATION
     pending = session._pending
     if pending["upsell"] is None:
@@ -144,9 +168,10 @@ def case_2b_decline_upsell_natural_phrase() -> None:
 
     turn2 = session.handle_message("i just want the Camp Cook Set (4-piece)")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "Order placed" in turn2
     assert "primary item only" in turn2.lower()
+    _decline_continue_shopping(session)
     print(
         f"Confirmed: natural phrasing 'i just want the X' correctly recognized as primary-only "
         f"(Rs.{primary_only_amount / 100:.2f})."
@@ -168,9 +193,10 @@ def case_2c_decline_upsell_primary_only_still_rejected() -> None:
 
     turn2 = session.handle_message("primary only")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "Order placed" not in turn2, "Gate must still reject — primary-only is not a bypass"
     assert "exceeds" in turn2 and "auto-approval limit" in turn2
+    _decline_continue_shopping(session)
 
     trail = get_transaction_trail(transaction_id)
     gate_events = [e for e in trail if e["event_type"] == "gate_check"]
@@ -191,12 +217,16 @@ def case_3_full_decline() -> None:
 
     turn1 = session.handle_message(SCENARIO_A_REQUEST)
     print(f"NEXUS (turn 1): {turn1}")
+    assert session.state == ChatState.AWAITING_QUANTITY
+    turn1b = session.handle_message("1")
+    print(f"NEXUS (turn 1b, quantity answered): {turn1b}")
     transaction_id = session._pending["transaction_id"]
 
     turn2 = session.handle_message("no")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "cancel" in turn2.lower()
+    _decline_continue_shopping(session)
 
     trail = get_transaction_trail(transaction_id)
     event_types = [e["event_type"] for e in trail]
@@ -225,8 +255,9 @@ def case_4_ambiguous_input() -> None:
     # Recovery: the session should still work correctly afterward.
     turn3 = session.handle_message("primary only")
     print(f"NEXUS (turn 3, now clear): {turn3}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "Order placed" in turn3
+    _decline_continue_shopping(session)
 
     print("Confirmed: ambiguous input triggers a clarifying re-ask (no guessing), and the session recovers correctly.")
 

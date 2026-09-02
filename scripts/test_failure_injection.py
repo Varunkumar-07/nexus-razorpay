@@ -60,7 +60,11 @@ def case_a_chat_over_bound_rejection() -> None:
     )
     turn1 = session.handle_message(request)
     print(f"NEXUS (turn 1): {turn1}")
-    assert session.state == ChatState.AWAITING_CONFIRMATION, "Should be awaiting confirmation after turn 1"
+    assert session.state == ChatState.AWAITING_QUANTITY, "Should ask for quantity first (none was stated)"
+
+    turn1b = session.handle_message("1")
+    print(f"NEXUS (turn 1b, quantity answered): {turn1b}")
+    assert session.state == ChatState.AWAITING_CONFIRMATION, "Should be awaiting confirmation once quantity is known"
 
     transaction_id = session._pending["transaction_id"]
     amount_paise = session._pending["amount_paise"]
@@ -72,11 +76,15 @@ def case_a_chat_over_bound_rejection() -> None:
 
     turn2 = session.handle_message("yes")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "exceeds" in turn2 and "auto-approval limit" in turn2, (
         "Rejection message should use the same Gate reason format as the agent path"
     )
     assert "Order placed" not in turn2, "No order should be created for an over-bound request"
+
+    turn3 = session.handle_message("no")
+    print(f"NEXUS (turn 3, done shopping): {turn3}")
+    assert session.state == ChatState.DONE
 
     trail = print_trail(transaction_id)
     event_types = [e["event_type"] for e in trail]

@@ -39,7 +39,13 @@ class MessageRequest(BaseModel):
 class MessageResponse(BaseModel):
     session_id: str
     reply: str = Field(..., description="The agent's reply for this turn.")
-    state: str = Field(..., description="Current ChatSession state: AWAITING_REQUEST, AWAITING_CONFIRMATION, or DONE.")
+    state: str = Field(
+        ...,
+        description=(
+            "Current ChatSession state: AWAITING_REQUEST, AWAITING_QUANTITY, "
+            "AWAITING_CONFIRMATION, AWAITING_CONTINUE_SHOPPING, or DONE."
+        ),
+    )
     transaction_id: Optional[str] = Field(
         None, description="The transaction_id for the most recent recommendation in this session, if any."
     )
@@ -118,12 +124,12 @@ def chat_message(payload: MessageRequest) -> dict:
     record.history.append({"role": "user", "text": payload.message})
 
     # Classify whenever ChatSession.handle_message() would itself treat this
-    # as a fresh request — i.e. any state except AWAITING_CONFIRMATION.
-    # ChatSession routes both AWAITING_REQUEST and DONE (a prior order just
-    # finished/was cancelled) to _handle_request(), so the classifier must
-    # match that, or a message right after a completed order silently skips
-    # classification and falls through to the LLM pipeline instead.
-    if record.chat_session.state != ChatState.AWAITING_CONFIRMATION:
+    # as a fresh request — i.e. AWAITING_REQUEST or DONE (a prior order just
+    # finished/was cancelled, both routed to _handle_request()). Every other
+    # state expects a specific, narrow reply (a quantity, a yes/no/primary-
+    # only, a yes/no/new-request) that ChatSession itself must parse — never
+    # detour those through the small-talk/browse-intent classifier.
+    if record.chat_session.state in (ChatState.AWAITING_REQUEST, ChatState.DONE):
         intent = classify_intent(payload.message)
 
         if intent == "small_talk":

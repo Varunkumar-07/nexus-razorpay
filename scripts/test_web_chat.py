@@ -89,12 +89,24 @@ def case_1_full_scenario_a_over_http() -> None:
     msg1.raise_for_status()
     reply1 = msg1.json()
     print(f"Turn 1 reply: {reply1['reply']}")
-    # Arctic Pro Sleeping Bag always comes with the CloudRest Sleeping Pad
-    # upsell, so the three-way prompt applies — see FAILURE_LOG.md Entry 6.
-    assert "Confirm both items" in reply1["reply"], "Turn 1 should ask for explicit confirmation"
-    assert reply1["state"] == "AWAITING_CONFIRMATION"
+    # No quantity was stated, so NEXUS asks first (Part A) before showing
+    # any price.
+    assert reply1["state"] == "AWAITING_QUANTITY"
     transaction_id = reply1["transaction_id"]
     assert transaction_id, "transaction_id should be present after a recommendation"
+
+    msg1b = requests.post(
+        f"{API_BASE_URL}/chat/message",
+        json={"session_id": session_id, "message": "1"},
+        timeout=30,
+    )
+    msg1b.raise_for_status()
+    reply1b = msg1b.json()
+    print(f"Turn 1b reply (quantity answered): {reply1b['reply']}")
+    # Arctic Pro Sleeping Bag always comes with the CloudRest Sleeping Pad
+    # upsell, so the three-way prompt applies — see FAILURE_LOG.md Entry 6.
+    assert "Confirm both items" in reply1b["reply"], "Should ask for explicit confirmation once quantity is known"
+    assert reply1b["state"] == "AWAITING_CONFIRMATION"
 
     msg2 = requests.post(
         f"{API_BASE_URL}/chat/message",
@@ -105,17 +117,31 @@ def case_1_full_scenario_a_over_http() -> None:
     reply2 = msg2.json()
     print(f"Turn 2 reply: {reply2['reply']}")
     assert "Order placed" in reply2["reply"], "Turn 2 should confirm order placement"
-    assert reply2["state"] == "DONE"
+    assert reply2["state"] == "AWAITING_CONTINUE_SHOPPING"
+
+    msg3 = requests.post(
+        f"{API_BASE_URL}/chat/message",
+        json={"session_id": session_id, "message": "no"},
+        timeout=30,
+    )
+    msg3.raise_for_status()
+    reply3 = msg3.json()
+    print(f"Turn 3 reply (done shopping): {reply3['reply']}")
+    assert reply3["state"] == "DONE"
 
     history_resp = requests.get(f"{API_BASE_URL}/chat/history/{session_id}", timeout=10)
     history_resp.raise_for_status()
     history = history_resp.json()
     print(f"History has {len(history)} entries.")
-    assert len(history) == 4, "Expect 2 user turns + 2 agent replies"
+    assert len(history) == 8, "Expect 4 user turns + 4 agent replies"
     assert history[0]["role"] == "user" and "sleeping bag" in history[0]["text"]
-    assert history[1]["role"] == "agent" and "Confirm both items" in history[1]["text"]
-    assert history[2]["role"] == "user" and history[2]["text"] == "yes"
-    assert history[3]["role"] == "agent" and "Order placed" in history[3]["text"]
+    assert history[1]["role"] == "agent" and "How many" in history[1]["text"]
+    assert history[2]["role"] == "user" and history[2]["text"] == "1"
+    assert history[3]["role"] == "agent" and "Confirm both items" in history[3]["text"]
+    assert history[4]["role"] == "user" and history[4]["text"] == "yes"
+    assert history[5]["role"] == "agent" and "Order placed" in history[5]["text"]
+    assert history[6]["role"] == "user" and history[6]["text"] == "no"
+    assert history[7]["role"] == "agent"
 
     trail = get_transaction_trail(transaction_id)
     assert trail, "Audit trail should exist for this transaction"
@@ -189,13 +215,14 @@ def case_3_small_talk_greeting() -> None:
     followup.raise_for_status()
     followup_reply = followup.json()
     print(f"Follow-up request reply: {followup_reply['reply']}")
-    assert "Confirm both items" in followup_reply["reply"], "A real request after small talk should work normally"
-    assert followup_reply["state"] == "AWAITING_CONFIRMATION"
+    # No quantity stated, so the classifier hands off correctly into the new
+    # quantity-ask state rather than straight to confirmation.
+    assert followup_reply["state"] == "AWAITING_QUANTITY", "A real request after small talk should work normally"
 
     history_resp = requests.get(f"{API_BASE_URL}/chat/history/{session_id}", timeout=10)
     history_resp.raise_for_status()
     history = history_resp.json()
-    assert len(history) == 4, "Expect: hi, greeting reply, real request, recommendation reply"
+    assert len(history) == 4, "Expect: hi, greeting reply, real request, quantity-ask reply"
     print(
         "Confirmed: small talk gets a friendly reply without touching the recommendation pipeline, "
         "and a real request afterward in the same session still works normally."
@@ -265,7 +292,15 @@ def case_5_browse_intent() -> None:
         timeout=30,
     )
     r1.raise_for_status()
-    assert "Confirm both items" in r1.json()["reply"]
+    assert r1.json()["state"] == "AWAITING_QUANTITY"
+
+    r1b = requests.post(
+        f"{API_BASE_URL}/chat/message",
+        json={"session_id": session_id, "message": "1"},
+        timeout=30,
+    )
+    r1b.raise_for_status()
+    assert "Confirm both items" in r1b.json()["reply"]
 
     r2 = requests.post(
         f"{API_BASE_URL}/chat/message",
@@ -274,7 +309,15 @@ def case_5_browse_intent() -> None:
     )
     r2.raise_for_status()
     assert "Order placed" in r2.json()["reply"]
-    assert r2.json()["state"] == "DONE"
+    assert r2.json()["state"] == "AWAITING_CONTINUE_SHOPPING"
+
+    r_no_more = requests.post(
+        f"{API_BASE_URL}/chat/message",
+        json={"session_id": session_id, "message": "no"},
+        timeout=30,
+    )
+    r_no_more.raise_for_status()
+    assert r_no_more.json()["state"] == "DONE"
 
     # 5b — same session, now in DONE state (regression case for Entry 3:
     # the classifier gate used to only fire in AWAITING_REQUEST and
@@ -317,11 +360,21 @@ def case_6_ask_about_this() -> None:
     print(f"Reply: {data['reply']}")
 
     assert data["suggested_action"] is None, "Should be classified as a product request, not browse/small-talk"
-    assert data["state"] == "AWAITING_CONFIRMATION", "Naming a specific product should produce a real recommendation"
-    assert "Arctic Pro Sleeping Bag" in data["reply"], "Recommendation should be for the product actually named"
-    assert "Confirm both items" in data["reply"]
+    assert data["state"] == "AWAITING_QUANTITY", "No quantity was stated, so the quantity ask comes first"
 
     transaction_id = data["transaction_id"]
+
+    resp_b = requests.post(
+        f"{API_BASE_URL}/chat/message",
+        json={"session_id": session_id, "message": "1"},
+        timeout=30,
+    )
+    resp_b.raise_for_status()
+    data_b = resp_b.json()
+    print(f"Reply (quantity answered): {data_b['reply']}")
+    assert data_b["state"] == "AWAITING_CONFIRMATION", "Naming a specific product should produce a real recommendation"
+    assert "Arctic Pro Sleeping Bag" in data_b["reply"], "Recommendation should be for the product actually named"
+    assert "Confirm both items" in data_b["reply"]
     trail = get_transaction_trail(transaction_id)
     recommendation_events = [e for e in trail if e["event_type"] == "recommendation"]
     assert len(recommendation_events) == 1, "Expect exactly one recommendation event"

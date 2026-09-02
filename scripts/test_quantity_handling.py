@@ -63,9 +63,13 @@ def case_1_explicit_quantity_over_bound() -> None:
 
     turn2 = session.handle_message("yes")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "exceeds" in turn2 and "auto-approval limit" in turn2, "Gate should reject with the standard reason"
     assert "Order placed" not in turn2, "No order should be created for a rejected request"
+
+    turn3 = session.handle_message("no")
+    print(f"NEXUS (turn 3, done shopping): {turn3}")
+    assert session.state == ChatState.DONE
 
     print("Confirmed: quantity correctly parsed as 2, correct product, Gate correctly rejects the true total.")
 
@@ -97,8 +101,12 @@ def case_2_explicit_quantity_under_bound() -> None:
 
     turn2 = session.handle_message("yes")
     print(f"NEXUS (turn 2): {turn2}")
-    assert session.state == ChatState.DONE
+    assert session.state == ChatState.AWAITING_CONTINUE_SHOPPING
     assert "Order placed" in turn2, "Gate should approve and a real order should be created"
+
+    turn3 = session.handle_message("no")
+    print(f"NEXUS (turn 3, done shopping): {turn3}")
+    assert session.state == ChatState.DONE
 
     print("Confirmed: quantity correctly parsed as 2, correct product, Gate correctly approves the true total.")
 
@@ -119,6 +127,14 @@ def case_3_no_quantity_regression() -> None:
     session = ChatSession()
     turn1 = session.handle_message("I need a good sleeping bag for winter camping, budget around Rs.3000.")
     print(f"NEXUS (turn 1): {turn1}")
+    # No quantity was stated, so the new AWAITING_QUANTITY ask kicks in first
+    # (Part A) — this is itself the regression check that "no quantity
+    # mentioned" is handled, distinct from Entry 5's "explicit quantity"
+    # cases above.
+    assert session.state == ChatState.AWAITING_QUANTITY
+
+    turn1b = session.handle_message("1")
+    print(f"NEXUS (turn 1b, quantity answered): {turn1b}")
     assert session.state == ChatState.AWAITING_CONFIRMATION
     assert session._pending["amount_paise"] == 279_900 + 49_900, "Amount should be unchanged from before the fix"
 
@@ -126,7 +142,7 @@ def case_3_no_quantity_regression() -> None:
     print(f"NEXUS (turn 2): {turn2}")
     assert "Order placed" in turn2
 
-    print("Confirmed: Scenario A (no quantity) is completely unaffected by the fix.")
+    print("Confirmed: Scenario A (no quantity) is completely unaffected by the Entry 5 fix.")
 
 
 def main() -> None:
