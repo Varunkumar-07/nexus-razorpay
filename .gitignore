@@ -220,3 +220,4 @@ Phases.png
 .DS_Store
 data/*.db
 DEMO_SCRIPT.md
+.claude/
