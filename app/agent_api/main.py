@@ -13,20 +13,20 @@ reasoning, the same way a real agent-to-agent commerce protocol would.
 
 Run standalone:
     uvicorn app.agent_api.main:app --reload
-Then browse http://127.0.0.1:8000/docs for the interactive OpenAPI docs,
-or http://127.0.0.1:8000/ for the human Chat web UI (Phase 10 — a thin
-HTTP wrapper + static frontend over the unmodified Phase 6 ChatSession,
-mounted at the end of this file so it never shadows the API routes above).
+Then browse http://127.0.0.1:8000/docs for the interactive OpenAPI docs.
+The human chat UI is the separate React + Vite frontend (frontend/),
+served from its own dev origin and talking to this API over CORS — this
+module no longer serves any UI of its own (the Phase 10 static chat page
+it used to mount at "/" was retired once the React frontend replaced it).
 """
 
-from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.agent_api.catalog_search import search_catalog
+from app.agent_api.recommendation_store import get_recommendation, store_recommendation
 from app.agent_api.schemas import OrderRequest, OrderResponse, ProductOut, RecommendRequest, RecommendResponse
 from app.audit.audit_log import log_event, new_transaction_id
 from app.catalog.seed_data import seed
@@ -34,7 +34,6 @@ from app.gate.gate import check_gate
 from app.metrics.routes import router as metrics_router
 from app.razorpay_integration.orders import GateNotApprovedError, create_order
 from app.web_chat.catalog_routes import router as catalog_page_router
-from app.web_chat.pages import router as web_pages_router
 from app.web_chat.routes import router as web_chat_router
 
 SOURCE = "agent"
@@ -189,6 +188,13 @@ def recommend_structured(payload: RecommendRequest) -> dict:
         },
     )
 
+    if not result["no_match"]:
+        store_recommendation(
+            transaction_id=transaction_id,
+            product_id=result["primary"]["id"],
+            amount_paise=result["primary"]["price_paise"],
+        )
+
     return result
 
 
@@ -203,12 +209,29 @@ def recommend_structured(payload: RecommendRequest) -> dict:
         "real Razorpay test-mode order (Phase 5) and fetches its payment "
         "status. If the Gate rejects, no Razorpay call is made and the "
         "rejection reason is returned. Every step is logged under "
-        "transaction_id, source='agent'."
+        "transaction_id, source='agent'.\n\n"
+        "The amount actually checked against the Gate and charged to "
+        "Razorpay is always the amount POST /recommend produced for this "
+        "transaction_id, looked up server-side — the amount_paise field on "
+        "this request is informational only and cannot change what gets "
+        "charged. A transaction_id with no prior /recommend call is "
+        "rejected with 404."
     ),
 )
 def place_order(payload: OrderRequest) -> dict:
+    record = get_recommendation(payload.transaction_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No recommendation found for this transaction_id. Call POST "
+                "/recommend first, then place the order against the "
+                "transaction_id it returns."
+            ),
+        )
+
     gate_result = check_gate(
-        amount_paise=payload.amount_paise,
+        amount_paise=record.amount_paise,
         confirmed=payload.confirmed,
         reasoning=payload.reasoning,
         transaction_id=payload.transaction_id,
@@ -248,20 +271,24 @@ def place_order(payload: OrderRequest) -> dict:
     }
 
 
-# --- Web Chat UI (Phase 10) -------------------------------------------------
-# Additive only: wraps the existing, unmodified Phase 6 ChatSession over HTTP
-# (see app/web_chat/routes.py) and serves its static frontend. catalog_all
-# (GET /catalog/all) is a separate, read-only listing for the browsable
-# product page (app/web_chat/catalog_routes.py) — reuses Phase 1's catalog
-# functions unmodified, no chat/gate/order logic. The static mount is
-# registered last, at "/", so it only ever catches requests that don't match
-# an explicit route above (e.g. "/", "/style.css", "/app.js", "/products.js")
-# — it never shadows /catalog/search, /catalog/all, /recommend, /order,
-# /chat/*, /products, or /docs.
+# --- Web Chat HTTP wrapper (Phase 10) ---------------------------------------
+# Wraps the existing, unmodified Phase 6 ChatSession over HTTP (see
+# app/web_chat/routes.py). catalog_all (GET /catalog/all) is a separate,
+# read-only listing consumed by the React frontend's browsable product page
+# (app/web_chat/catalog_routes.py) — reuses Phase 1's catalog functions
+# unmodified, no chat/gate/order logic. The human UI itself lives entirely
+# in the separate React + Vite app (frontend/); this backend serves API
+# routes only.
 app.include_router(web_chat_router)
 app.include_router(catalog_page_router)
-app.include_router(web_pages_router)
 app.include_router(metrics_router)
 
-_WEB_CHAT_STATIC_DIR = Path(__file__).resolve().parent.parent / "web_chat" / "static"
-app.mount("/", StaticFiles(directory=str(_WEB_CHAT_STATIC_DIR), html=True), name="web_chat_ui")
+
+@app.get("/", include_in_schema=False)
+def root() -> dict:
+    """API root — the human UI is the separate React + Vite frontend."""
+    return {
+        "service": "NEXUS Agent API",
+        "docs": "/docs",
+        "frontend": "http://localhost:5173",
+    }
