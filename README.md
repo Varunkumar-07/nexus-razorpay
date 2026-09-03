@@ -53,10 +53,15 @@ flowchart LR
 | 3 — The Gate | Amount bound (Rs.5,000), explicit confirmation, reasoning-required checks |
 | 4 — Audit Log | One SQLite table, one row per event, threaded by `transaction_id` |
 | 5 — Razorpay Integration | Real test-mode order creation, gated — refuses to run without an approved Gate result |
-| 6 — Chat Adapter | Two-turn human conversation: recommend → confirm → order |
+| 6 — Chat Adapter | Multi-turn human conversation: optional quantity-ask → confirm → order, then a continue-shopping loop that can restart the cycle for another, independent order |
 | 7 — Agent API Adapter + ScoutBot | Documented HTTP API + a second, self-built AI agent calling it over real HTTP |
 | 8 — Failure Injection | Amount-bound rejection (both adapters) + simulated Razorpay auth failure, both handled gracefully |
 | 9 — Packaging | This README, cleanup pass, demo script |
+| 10 — Web Chat UI *(later retired)* | A static HTML/CSS/vanilla-JS chat page served by FastAPI itself — fully removed in a post-audit cleanup once Phase 11's React frontend became the primary (and only) browser UI |
+| 11 — React Frontend | Standalone React + Vite app (`frontend/`) — Chat and Catalog views, its own dev origin, talks to the backend over CORS |
+| 12A — Stats & Metrics | `MetricsService` + `GET /metrics/summary` + the React Stats page — revenue, upsell rates, Gate rejection breakdown, all computed live from the Audit Log |
+| 12B — Setup & Reset Tooling | `scripts/check_setup.py` (6 live pre-flight checks) and `scripts/reset_demo_state.py` (safe, reusable demo-state reset) |
+| 12C — Protocol Alignment | `PROTOCOL_ALIGNMENT.md` — mapping NEXUS's mechanisms to UAP/AP2/ACP/TAP, with an explicit non-compliance disclaimer |
 
 Full detail on what broke and how it was fixed, phase by phase, is in **[FAILURE_LOG.md](FAILURE_LOG.md)** — including a dedicated "Deliberate Failure Scenarios — Demonstrated" section for the two failure modes proven in Phase 8.
 
@@ -138,17 +143,17 @@ python3 scripts/chat_cli.py
 
 Type a request, e.g. `I need a good sleeping bag for winter camping, budget around Rs.3000.`, then respond to the confirmation prompt with `yes` or `no`. If an upsell was offered alongside the primary item, the prompt offers a third option — reply `primary only` (or a natural phrase like "just the X") to accept the primary item alone; the Gate is re-checked against that smaller amount before the order is created. Each reply prints its `transaction_id` for later audit lookup.
 
-### 4b. Or use the web Chat UI (same ChatSession, browser instead of terminal)
+### 4b. Or drive the Chat Adapter directly over HTTP (no browser UI)
 
 ```bash
 uvicorn app.agent_api.main:app --reload
 ```
 
-Open **http://127.0.0.1:8000/** — a plain HTML/CSS/vanilla-JS chat page served by the same server as the Agent API. It's a thin HTTP wrapper (`POST /chat/start`, `POST /chat/message`, `GET /chat/history/{session_id}`) around the exact same `ChatSession` class `chat_cli.py` uses — no gate/order/audit logic is reimplemented. Sessions persist server-side (in-memory) and the browser keeps its `session_id` in a cookie, so a page refresh resumes the same conversation. Events are still tagged `source="chat"` in the Audit Log, identically to the CLI path.
+The same `ChatSession` class `chat_cli.py` uses is also exposed as a thin HTTP wrapper — `POST /chat/start`, `POST /chat/message`, `GET /chat/history/{session_id}` (see `app/web_chat/routes.py`) — no gate/order/audit logic is reimplemented. There's no bundled browser page for it (that was the project's original static UI, retired once the React frontend below replaced it as the app we actually demo); this is for scripting or testing the chat backend directly, e.g. with `curl` or the pattern `scripts/test_web_chat.py` uses. Sessions persist server-side (in-memory), keyed by the `session_id` each response returns. Events are tagged `source="chat"` in the Audit Log, identically to the CLI path.
 
-### 4c. Or use the React frontend (the primary demo UI) — two terminals
+### 4c. Or use the React frontend (the primary demo UI, and the only browser UI) — two terminals
 
-This is a genuinely separate frontend application (`frontend/`, React + Vite) — not served by FastAPI, its own dev server, its own origin, talking to the same backend over CORS. It replaces `app/web_chat/static/` as the app we actually demo; the old static UI stays in place and keeps working (Step 4b above) but isn't the primary one anymore.
+This is a genuinely separate frontend application (`frontend/`, React + Vite) — not served by FastAPI, its own dev server, its own origin, talking to the same backend over CORS.
 
 **Terminal 1 — backend (port 8000):**
 
@@ -235,14 +240,13 @@ app/
   gate/               Phase 3 — amount/confirmation/reasoning checks
   audit/              Phase 4 — audit_log table, log_event(), get_transaction_trail(), get_events_by_type()
   razorpay_integration/  Phase 5 — gated Razorpay order creation + payment status
-  chat_adapter/       Phase 6 — two-turn human conversation adapter (ChatSession)
+  chat_adapter/       Phase 6 — multi-turn human conversation adapter (ChatSession): optional quantity-ask, confirm, continue-shopping loop
   agent_api/          Phase 7 — FastAPI structured endpoint for machine callers
-  web_chat/           HTTP routes (chat, catalog listing) + old static UI, wraps ChatSession unmodified
+  web_chat/           HTTP routes (chat, catalog listing), wraps ChatSession unmodified
   metrics/            MetricsService — read-only business analytics computed from the Audit Log
 scoutbot/             Phase 7 — the second, self-built AI buyer agent
 scripts/              CLI entry points + one test script per phase
 frontend/             React + Vite app (primary demo UI) — separate origin, calls the backend over CORS
 FAILURE_LOG.md        What broke during this build and how it was resolved
 PROTOCOL_ALIGNMENT.md  How NEXUS's mechanisms relate to UAP/AP2/ACP/TAP — and where that relationship ends
-DEMO_SCRIPT.md         Run sheet for the 5-minute pitch video
 ```
