@@ -13,6 +13,23 @@ ScoutBot against it over real HTTP twice:
            adapters are governed by the exact same Gate, independent of
            what the calling agent considers its own budget.
 
+  Case 3 — Tampered POST /order (underpay attempt): recommend a tent under
+           Rs.5000 (real price Rs.4,599 — the StormShield 2-Person Tent),
+           then call /order directly with amount_paise lied down to Rs.1.
+           The order must still be approved and charged at the real
+           Rs.4,599 — proving the server ignores the client's amount_paise
+           and uses what /recommend actually produced.
+
+  Case 4 — Tampered POST /order (gate-bypass attempt): recommend a tent
+           under Rs.9000 (real price Rs.8,999 — over the Gate's Rs.5,000
+           bound), then call /order directly with amount_paise lied down
+           to Rs.1, well under the bound. The Gate must still refuse,
+           proving a caller cannot talk their way past the Rs.5,000 bound
+           by simply claiming a smaller amount than what was recommended.
+
+  Case 5 — POST /order with a transaction_id that never went through
+           /recommend. Must be rejected with 404, not silently accepted.
+
 Prints the full audit trail for each transaction, confirming every event
 is tagged source="agent".
 
@@ -96,6 +113,90 @@ def main() -> None:
             e["event_type"] == "gate_check" and e["details"]["approved"] is False for e in trail_2
         ), "A rejected gate_check event is expected"
         print("\nConfirmed: Gate refused the over-bound order — same Gate logic as the chat path.")
+
+        print("\n########## CASE 3 — tampered /order, underpay attempt (should charge the REAL amount) ##########")
+        recommend_3 = requests.post(
+            f"{API_BASE_URL}/recommend",
+            json={"category": "tents", "max_price_paise": 500000, "keywords": None},
+            timeout=15,
+        )
+        recommend_3.raise_for_status()
+        rec_3 = recommend_3.json()
+        real_amount_3 = rec_3["primary"]["price_paise"]
+        print(f"ScoutBot test: /recommend picked {rec_3['primary']['name']} at Rs.{real_amount_3 / 100:.2f}")
+        print("Test: calling /order with amount_paise tampered down to Rs.1 ...")
+        order_3 = requests.post(
+            f"{API_BASE_URL}/order",
+            json={
+                "transaction_id": rec_3["transaction_id"],
+                "amount_paise": 100,  # lied: real price is real_amount_3, not Rs.1
+                "confirmed": True,
+                "reasoning": "Attempting to underpay by lying about amount_paise.",
+            },
+            timeout=15,
+        )
+        order_3.raise_for_status()
+        result_3 = order_3.json()
+        assert result_3["approved"] is True, "Case 3 order should be approved (real amount is under the bound)"
+        assert result_3["order"] is not None, "Case 3 should produce a real Razorpay order"
+        assert result_3["order"]["amount"] == real_amount_3, (
+            f"Case 3 was charged {result_3['order']['amount']} paise, expected the real "
+            f"recommended amount {real_amount_3} paise — the tampered amount_paise must be ignored"
+        )
+        trail_3 = print_trail(rec_3["transaction_id"])
+        gate_checks_3 = [e for e in trail_3 if e["event_type"] == "gate_check"]
+        assert gate_checks_3 and gate_checks_3[0]["details"]["amount_paise"] == real_amount_3, (
+            "Case 3's gate_check event must record the real amount, not the tampered one"
+        )
+        print(f"\nConfirmed: charged Rs.{result_3['order']['amount'] / 100:.2f} (real price), tampered amount_paise=Rs.1 had zero effect.")
+
+        print("\n########## CASE 4 — tampered /order, gate-bypass attempt (should still be REFUSED) ##########")
+        recommend_4 = requests.post(
+            f"{API_BASE_URL}/recommend",
+            json={"category": "tents", "max_price_paise": 900000, "keywords": None},
+            timeout=15,
+        )
+        recommend_4.raise_for_status()
+        rec_4 = recommend_4.json()
+        real_amount_4 = rec_4["primary"]["price_paise"]
+        assert real_amount_4 > 500000, "Case 4 requires a recommendation over the Rs.5,000 bound to be meaningful"
+        print(f"ScoutBot test: /recommend picked {rec_4['primary']['name']} at Rs.{real_amount_4 / 100:.2f} (over the bound)")
+        print("Test: calling /order with amount_paise tampered down to Rs.1, hoping to sneak past the Gate ...")
+        order_4 = requests.post(
+            f"{API_BASE_URL}/order",
+            json={
+                "transaction_id": rec_4["transaction_id"],
+                "amount_paise": 100,  # lied: hoping the Gate checks this instead of the real amount
+                "confirmed": True,
+                "reasoning": "Attempting to bypass the Rs.5,000 gate bound by lying about amount_paise.",
+            },
+            timeout=15,
+        )
+        order_4.raise_for_status()
+        result_4 = order_4.json()
+        assert result_4["approved"] is False, "Case 4 must be refused — real amount exceeds the Gate bound"
+        assert result_4["order"] is None, "Case 4 must not create a Razorpay order"
+        trail_4 = print_trail(rec_4["transaction_id"])
+        assert not any(e["event_type"] == "order_created" for e in trail_4), "No order_created event expected for Case 4"
+        gate_checks_4 = [e for e in trail_4 if e["event_type"] == "gate_check"]
+        assert gate_checks_4 and gate_checks_4[0]["details"]["amount_paise"] == real_amount_4, (
+            "Case 4's gate_check event must record the real amount, not the tampered one"
+        )
+        print("\nConfirmed: tampering amount_paise down does not bypass the Rs.5,000 Gate bound.")
+
+        print("\n########## CASE 5 — /order with an unknown transaction_id (should be REJECTED, 404) ##########")
+        order_5 = requests.post(
+            f"{API_BASE_URL}/order",
+            json={
+                "transaction_id": "no-such-transaction-id",
+                "amount_paise": 100,
+                "confirmed": True,
+                "reasoning": "This transaction_id never went through /recommend.",
+            },
+            timeout=15,
+        )
+        assert order_5.status_code == 404, f"Case 5 expected 404, got {order_5.status_code}"
+        print(f"\nConfirmed: unknown transaction_id rejected with {order_5.status_code}: {order_5.json()['detail']}")
 
         print("\n\nAll Phase 7 test cases behaved as expected.")
     finally:

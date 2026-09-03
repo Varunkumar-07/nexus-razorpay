@@ -42,7 +42,13 @@ class RecommendResponse(BaseModel):
 class OrderRequest(BaseModel):
     transaction_id: str = Field(..., description="transaction_id returned by POST /recommend.")
     amount_paise: int = Field(
-        ..., description="Total order amount in paise; must match the recommended product's price."
+        ...,
+        description=(
+            "Informational only — ignored by the server. POST /order always "
+            "charges the amount_paise stored server-side from this "
+            "transaction_id's prior POST /recommend call, so a caller cannot "
+            "alter the actual charge by changing this field."
+        ),
     )
     confirmed: bool = Field(
         ..., description="Explicit confirmation flag. Must be true — the Gate rejects otherwise."
